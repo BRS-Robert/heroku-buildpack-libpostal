@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# bin/detect
+#
+# Usage: bin/detect <build-dir>
+# Returns: 0 if libpostal should be installed, 1 otherwise.
+# Detects presence of .libpostal file or Gemfile containing ruby_postal.
+
+BUILD_DIR=$1
+
+if [ -f "$BUILD_DIR/.libpostal" ]; then
+  echo "libpostal"
+  exit 0
+fi
+
+if [ -f "$BUILD_DIR/Gemfile" ] && grep -q "ruby_postal" "$BUILD_DIR/Gemfile"; then
+  echo "libpostal"
+  exit 0
+fi
+
+exit 1

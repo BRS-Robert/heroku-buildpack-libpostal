@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# bin/release
+#
+# Usage: bin/release <build-dir>
+# Outputs YAML describing config vars and default process types.
+
+cat <<YAML
+---
+config_vars:
+  LIBPOSTAL_DATA_DIR: /app/vendor/libpostal/share/libpostal
+  LD_LIBRARY_PATH: /app/vendor/libpostal/lib
+YAML
