@@ -63,16 +63,29 @@ info  "   This build will likely EXCEED the slug limit."
 info  "   Proceeding anyway — consider the microservice approach if deploy fails."
 echo  ""
 
-# ── Install build dependencies ────────────────────────────────────────────────
-arrow "Installing build dependencies"
-apt-get update -qq 2>&1 | indent
-apt-get install -y -qq \
-  autoconf \
-  automake \
-  libtool \
-  pkg-config \
-  curl \
-  git 2>&1 | indent
+# ── Verify build dependencies ─────────────────────────────────────────────────
+# apt-get is NOT available here — Heroku build env is non-root.
+# Dependencies (autoconf, automake, libtool, pkg-config) must be installed
+# via heroku-buildpack-apt (index 1) with an Aptfile in the app repo.
+arrow "Verifying build dependencies"
+MISSING=()
+for cmd in autoconf automake libtool pkg-config git curl; do
+  if ! command -v "$cmd" &>/dev/null; then
+    MISSING+=("$cmd")
+  fi
+done
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+  error "Missing build tools: ${MISSING[*]}.
+       Add heroku-buildpack-apt as buildpack index 1 and create an Aptfile
+       in your repo with these lines:
+         autoconf
+         automake
+         libtool
+         pkg-config
+       Then re-run: git push heroku main"
+fi
+info "All build dependencies found ✓"
 
 # ── Restore from cache ────────────────────────────────────────────────────────
 CACHED_VERSION=""
