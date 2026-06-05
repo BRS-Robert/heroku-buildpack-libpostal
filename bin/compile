@@ -3,94 +3,54 @@
 #
 # Usage:      bin/compile <build-dir> <cache-dir> <env-dir>
 # Summary:    Installs libpostal (with training data) into the Heroku slug.
-#
-# Key paths (at runtime BUILD_DIR becomes /app):
-#   Libraries  → /app/vendor/libpostal/lib
-#   Headers    → /app/vendor/libpostal/include
-#   Data       → /app/vendor/libpostal/share/libpostal
-#
-# Caching strategy:
-#   CACHE_DIR persists between deploys. We cache both the compiled
-#   binaries AND the 2 GB training data so subsequent deploys are fast.
-#   Cache is busted when LIBPOSTAL_VERSION changes.
 
 set -euo pipefail
 
-# ── Arguments ────────────────────────────────────────────────────────────────
 BUILD_DIR=$1
 CACHE_DIR=$2
 ENV_DIR=$3
 
-# ── Config ───────────────────────────────────────────────────────────────────
 LIBPOSTAL_VERSION="${LIBPOSTAL_VERSION:-master}"
 LIBPOSTAL_REPO="https://github.com/openvenues/libpostal"
 
-# Runtime paths (must use /app, not $BUILD_DIR, so paths survive slug relocation)
 RUNTIME_INSTALL_DIR="/app/vendor/libpostal"
 RUNTIME_DATA_DIR="/app/vendor/libpostal/share/libpostal"
 
-# Build-time equivalents (same relative path under BUILD_DIR)
 INSTALL_DIR="$BUILD_DIR/vendor/libpostal"
 DATA_DIR="$BUILD_DIR/vendor/libpostal/share/libpostal"
 
-# Cache paths
 CACHE_LIBPOSTAL="$CACHE_DIR/libpostal"
 CACHE_VERSION_FILE="$CACHE_LIBPOSTAL/.version"
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
 arrow()  { echo "-----> $*"; }
 info()   { echo "       $*"; }
 error()  { echo " !     $*" >&2; exit 1; }
-
 indent() { sed 's/^/       /'; }
 
-# ── Load env vars if present ─────────────────────────────────────────────────
 if [ -d "$ENV_DIR" ]; then
   for key in LIBPOSTAL_VERSION; do
     [ -f "$ENV_DIR/$key" ] && export "$key=$(cat "$ENV_DIR/$key")"
   done
 fi
 
-# ── Check slug size warning ───────────────────────────────────────────────────
 arrow "libpostal Buildpack"
 info  "Version : $LIBPOSTAL_VERSION"
 info  "Install : $RUNTIME_INSTALL_DIR"
 info  "Data    : $RUNTIME_DATA_DIR"
 echo  ""
-info  "⚠️  WARNING: libpostal training data is ~2 GB uncompressed."
+info  "WARNING: libpostal training data is ~2 GB uncompressed."
 info  "   Heroku slugs have a 500 MB compressed limit."
 info  "   This build will likely EXCEED the slug limit."
 info  "   Proceeding anyway — consider the microservice approach if deploy fails."
 echo  ""
 
-# ── Add heroku-buildpack-apt paths to PATH ────────────────────────────────────
-# heroku-buildpack-apt installs to $BUILD_DIR/.apt/usr — not /usr — so binaries
-# won't be found via the default PATH. Prepend all known apt locations here.
+# Add heroku-buildpack-apt paths — it installs to $BUILD_DIR/.apt/usr, not /usr
 export PATH="$BUILD_DIR/.apt/usr/bin:$BUILD_DIR/.apt/usr/sbin:$PATH"
 export LD_LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib:${LD_LIBRARY_PATH:-}"
 export LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib:${LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$BUILD_DIR/.apt/usr/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
-# ── Verify build dependencies ─────────────────────────────────────────────────
-arrow "Verifying build dependencies"
-MISSING=()
-for cmd in autoconf automake libtool pkg-config git curl; do
-  if ! command -v "$cmd" &>/dev/null; then
-    MISSING+=("$cmd")
-  fi
-done
-
-if [ ${#MISSING[@]} -gt 0 ]; then
-  error "Missing build tools: ${MISSING[*]}.
-       Ensure heroku-buildpack-apt is buildpack index 1 and your Aptfile contains:
-         autoconf
-         automake
-         libtool
-         pkg-config"
-fi
-info "All build dependencies found ✓"
-
-# ── Restore from cache ────────────────────────────────────────────────────────
+# Restore from cache
 CACHED_VERSION=""
 [ -f "$CACHE_VERSION_FILE" ] && CACHED_VERSION=$(cat "$CACHE_VERSION_FILE")
 
@@ -106,20 +66,16 @@ else
     arrow "No cache found — building libpostal from source"
   fi
 
-  # ── Clone ──────────────────────────────────────────────────────────────────
   arrow "Cloning libpostal ($LIBPOSTAL_VERSION)"
   TMP_SRC=$(mktemp -d)
   git clone --depth 1 --branch "$LIBPOSTAL_VERSION" "$LIBPOSTAL_REPO" "$TMP_SRC" 2>&1 | indent \
     || git clone --depth 1 "$LIBPOSTAL_REPO" "$TMP_SRC" 2>&1 | indent
 
-  # ── Build ──────────────────────────────────────────────────────────────────
   arrow "Building libpostal (this takes a few minutes)"
   cd "$TMP_SRC"
 
   ./bootstrap.sh 2>&1 | indent
 
-  # IMPORTANT: configure uses /app paths so the hardcoded data dir in the
-  # compiled binary matches the runtime location inside the dyno.
   ./configure \
     --prefix="$RUNTIME_INSTALL_DIR" \
     --datadir="$RUNTIME_DATA_DIR/.." \
@@ -127,12 +83,9 @@ else
 
   make -j"$(nproc)" 2>&1 | indent
 
-  # ── Install into BUILD_DIR ─────────────────────────────────────────────────
   arrow "Installing libpostal to $INSTALL_DIR"
-  # make install respects DESTDIR to redirect /app/vendor → BUILD_DIR/vendor
   make install DESTDIR="$BUILD_DIR" 2>&1 | indent
 
-  # ── Download training data ─────────────────────────────────────────────────
   arrow "Downloading libpostal training data (~2 GB) — this will take a while"
   mkdir -p "$DATA_DIR"
 
@@ -151,7 +104,6 @@ else
       || error "Failed to download $file"
   done
 
-  # ── Cache the result ───────────────────────────────────────────────────────
   arrow "Caching libpostal for future deploys"
   rm -rf "$CACHE_LIBPOSTAL"
   mkdir -p "$CACHE_LIBPOSTAL"
@@ -159,22 +111,16 @@ else
   echo "$LIBPOSTAL_VERSION" > "$CACHE_VERSION_FILE"
   info "Cached ✓"
 
-  # ── Cleanup ────────────────────────────────────────────────────────────────
   cd /
   rm -rf "$TMP_SRC"
 fi
 
-# ── ldconfig equivalent: write ld.so.conf ────────────────────────────────────
-# Heroku doesn't run ldconfig; we handle this via LD_LIBRARY_PATH in profile.d
 arrow "Configuring runtime library path"
 
-# ── Write profile.d script ────────────────────────────────────────────────────
-# This runs on every dyno startup and sets the correct env vars.
 PROFILE_DIR="$BUILD_DIR/.profile.d"
 mkdir -p "$PROFILE_DIR"
 
 cat > "$PROFILE_DIR/libpostal.sh" <<'PROFILE'
-# Set up libpostal paths at dyno startup
 export LIBPOSTAL_INSTALL_DIR="/app/vendor/libpostal"
 export LIBPOSTAL_DATA_DIR="/app/vendor/libpostal/share/libpostal"
 export LD_LIBRARY_PATH="$LIBPOSTAL_INSTALL_DIR/lib:${LD_LIBRARY_PATH:-}"
@@ -187,12 +133,6 @@ PROFILE
 
 info "profile.d/libpostal.sh written ✓"
 
-# ── Export vars for subsequent buildpacks (e.g. heroku-buildpack-ruby) ────────
-# These allow the Ruby buildpack to find libpostal when building native gems.
-EXPORT_FILE="$1/../.heroku/buildpack-exports/libpostal"
-mkdir -p "$(dirname "$EXPORT_FILE")" 2>/dev/null || true
-
-# Heroku's standard export mechanism
 cat >> "$BUILD_DIR/../export" <<EXPORT 2>/dev/null || true
 export LIBPOSTAL_INSTALL_DIR="$INSTALL_DIR"
 export LIBPOSTAL_DATA_DIR="$DATA_DIR"
@@ -208,6 +148,3 @@ arrow "libpostal buildpack complete ✓"
 info  "Library : $INSTALL_DIR/lib"
 info  "Headers : $INSTALL_DIR/include"
 info  "Data    : $DATA_DIR"
-echo  ""
-info  "Add ruby_postal to your Gemfile — the heroku-buildpack-ruby"
-info  "will pick up libpostal automatically via the exported env vars."
