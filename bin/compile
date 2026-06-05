@@ -13,6 +13,10 @@ ENV_DIR=$3
 LIBPOSTAL_VERSION="${LIBPOSTAL_VERSION:-master}"
 LIBPOSTAL_REPO="https://github.com/openvenues/libpostal"
 
+# Bump when buildpack source patches change so Heroku cache is invalidated.
+BUILD_PATCH_ID="features-h-glibc-collision-v1"
+CACHE_KEY="${LIBPOSTAL_VERSION}:${BUILD_PATCH_ID}"
+
 RUNTIME_INSTALL_DIR="/app/vendor/libpostal"
 RUNTIME_DATA_DIR="/app/vendor/libpostal/share/libpostal"
 
@@ -26,6 +30,20 @@ arrow()  { echo "-----> $*"; }
 info()   { echo "       $*"; }
 error()  { echo " !     $*" >&2; exit 1; }
 indent() { sed 's/^/       /'; }
+
+# libpostal ships src/features.h, which shadows glibc's <features.h> when libtool
+# adds -I. On modern Heroku stacks this breaks compilation with thousands of
+# cascading errors (VECTOR_INIT, unknown uint32_t, etc.).
+patch_features_h_collision() {
+  if [ ! -f src/features.h ]; then
+    return 0
+  fi
+
+  arrow "Patching libpostal features.h / glibc header collision"
+  mv src/features.h src/libpostal_features.h
+  sed -i 's/"features\.h"/"libpostal_features.h"/g' src/*.c src/*.h 2>/dev/null || true
+  sed -i 's/FEATURES_H/LIBPOSTAL_FEATURES_H/g' src/libpostal_features.h
+}
 
 if [ -d "$ENV_DIR" ]; then
   for key in LIBPOSTAL_VERSION; do
@@ -54,14 +72,14 @@ export PKG_CONFIG_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$BUIL
 CACHED_VERSION=""
 [ -f "$CACHE_VERSION_FILE" ] && CACHED_VERSION=$(cat "$CACHE_VERSION_FILE")
 
-if [ "$CACHED_VERSION" = "$LIBPOSTAL_VERSION" ] && [ -d "$CACHE_LIBPOSTAL/lib" ]; then
+if [ "$CACHED_VERSION" = "$CACHE_KEY" ] && [ -d "$CACHE_LIBPOSTAL/lib" ]; then
   arrow "Restoring libpostal from cache (version: $LIBPOSTAL_VERSION)"
   mkdir -p "$INSTALL_DIR"
   cp -a "$CACHE_LIBPOSTAL/." "$INSTALL_DIR/" 2>&1 | indent
   info "Cache restored ✓"
 else
   if [ -n "$CACHED_VERSION" ]; then
-    arrow "Cache miss (cached: $CACHED_VERSION, requested: $LIBPOSTAL_VERSION) — rebuilding"
+    arrow "Cache miss (cached: $CACHED_VERSION, requested: $CACHE_KEY) — rebuilding"
   else
     arrow "No cache found — building libpostal from source"
   fi
@@ -74,6 +92,8 @@ else
   arrow "Building libpostal (this takes a few minutes)"
   cd "$TMP_SRC"
 
+  patch_features_h_collision
+
   ./bootstrap.sh 2>&1 | indent
 
   ./configure \
@@ -81,7 +101,8 @@ else
     --datadir="$RUNTIME_DATA_DIR/.." \
     2>&1 | indent
 
-  make -j"$(nproc)" 2>&1 | indent
+  # -Orecursive avoids intermittent parallel make failures in libpostal data targets.
+  make -j"$(nproc)" -Orecursive 2>&1 | indent
 
   arrow "Installing libpostal to $INSTALL_DIR"
   make install DESTDIR="$BUILD_DIR" 2>&1 | indent
@@ -108,7 +129,7 @@ else
   rm -rf "$CACHE_LIBPOSTAL"
   mkdir -p "$CACHE_LIBPOSTAL"
   cp -a "$INSTALL_DIR/." "$CACHE_LIBPOSTAL/"
-  echo "$LIBPOSTAL_VERSION" > "$CACHE_VERSION_FILE"
+  echo "$CACHE_KEY" > "$CACHE_VERSION_FILE"
   info "Cached ✓"
 
   cd /
