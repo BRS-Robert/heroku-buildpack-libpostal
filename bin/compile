@@ -63,10 +63,15 @@ info  "   This build will likely EXCEED the slug limit."
 info  "   Proceeding anyway — consider the microservice approach if deploy fails."
 echo  ""
 
+# ── Add heroku-buildpack-apt paths to PATH ────────────────────────────────────
+# heroku-buildpack-apt installs to $BUILD_DIR/.apt/usr — not /usr — so binaries
+# won't be found via the default PATH. Prepend all known apt locations here.
+export PATH="$BUILD_DIR/.apt/usr/bin:$BUILD_DIR/.apt/usr/sbin:$PATH"
+export LD_LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib:${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib:${LIBRARY_PATH:-}"
+export PKG_CONFIG_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$BUILD_DIR/.apt/usr/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
 # ── Verify build dependencies ─────────────────────────────────────────────────
-# apt-get is NOT available here — Heroku build env is non-root.
-# Dependencies (autoconf, automake, libtool, pkg-config) must be installed
-# via heroku-buildpack-apt (index 1) with an Aptfile in the app repo.
 arrow "Verifying build dependencies"
 MISSING=()
 for cmd in autoconf automake libtool pkg-config git curl; do
@@ -77,13 +82,11 @@ done
 
 if [ ${#MISSING[@]} -gt 0 ]; then
   error "Missing build tools: ${MISSING[*]}.
-       Add heroku-buildpack-apt as buildpack index 1 and create an Aptfile
-       in your repo with these lines:
+       Ensure heroku-buildpack-apt is buildpack index 1 and your Aptfile contains:
          autoconf
          automake
          libtool
-         pkg-config
-       Then re-run: git push heroku main"
+         pkg-config"
 fi
 info "All build dependencies found ✓"
 
